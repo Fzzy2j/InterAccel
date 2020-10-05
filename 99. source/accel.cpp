@@ -2,6 +2,7 @@
 #include "utils.h"
 #include <windows.h>
 #include <math.h>
+#include "winuser.h"
 #include <iostream>
 
 int main()
@@ -9,6 +10,17 @@ int main()
 	InterceptionContext context;
 	InterceptionDevice device;
 	InterceptionStroke stroke;
+
+	const int mousePositionsSize = 200;
+	int mousePositionsX[mousePositionsSize] = { };
+	int mousePositionsY[mousePositionsSize] = { };
+	bool mouseSnapX[mousePositionsSize] = { };
+	bool mouseSnapY[mousePositionsSize] = { };
+
+	int lastMouseX = 0;
+	int lastMouseY = 0;
+
+	bool doingAccel = false;
 
 	raise_process_priority();
 
@@ -59,7 +71,7 @@ int main()
 	HANDLE hConsole;
 	hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 
-	
+
 	CONSOLE_FONT_INFOEX cfi;
 	cfi.cbSize = sizeof cfi;
 	cfi.nFont = 0;
@@ -69,12 +81,12 @@ int main()
 	cfi.FontWeight = FW_NORMAL;
 	wcscpy(cfi.FaceName, L"Consolas");
 	SetCurrentConsoleFontEx(hConsole, FALSE, &cfi);
-	
+
 
 	coord.X = 80;
 	coord.Y = 25;
 	SetConsoleScreenBufferSize(hConsole, coord);
-	
+
 	SMALL_RECT conSize;
 
 	conSize.Left = 0;
@@ -93,7 +105,7 @@ int main()
 
 
 	// read variables once at runtime
-	FILE *fp;
+	FILE* fp;
 
 	if ((fp = fopen("settings.txt", "r+")) == NULL) {
 		SetConsoleTextAttribute(hConsole, 0x04);
@@ -161,7 +173,7 @@ int main()
 				if (variableValue != 0) {
 					debugOutput = 1;
 				}
-				
+
 			}
 			else
 			{
@@ -193,13 +205,13 @@ int main()
 	if (!debugOutput) {
 		printf("\n\nSet 'FancyOutput = 1' in settings.txt for realtime data\n(debug use only: may result in some latency)");
 	}
-	
+
 
 	LARGE_INTEGER frameTime, oldFrameTime, PCfreq;
 
 	QueryPerformanceCounter(&oldFrameTime);
 	QueryPerformanceFrequency(&PCfreq);
-	
+
 	//Pre-loop calculations
 	a = var_senscap - var_sens;
 	b = var_accel / abs(a);
@@ -210,23 +222,23 @@ int main()
 
 		if (interception_is_mouse(device))
 		{
-			InterceptionMouseStroke &mstroke = *(InterceptionMouseStroke *)&stroke;
+			InterceptionMouseStroke& mstroke = *(InterceptionMouseStroke*)&stroke;
 
 			if (!(mstroke.flags & INTERCEPTION_MOUSE_MOVE_ABSOLUTE)) {
 
 				// figure out frametime
 				QueryPerformanceCounter(&frameTime);
-				frameTime_ms = (double) (frameTime.QuadPart - oldFrameTime.QuadPart) * 1000.0 / PCfreq.QuadPart;
+				frameTime_ms = (double)(frameTime.QuadPart - oldFrameTime.QuadPart) * 1000.0 / PCfreq.QuadPart;
 				if (frameTime_ms > 200)
 					frameTime_ms = 200;
 
 				// retrieve new mouse data
-				dx = (double) mstroke.x;
-				dy = (double) mstroke.y;
+				dx = (double)mstroke.x;
+				dy = (double)mstroke.y;
 
 				// angle correction
 				if (var_angle) {
-					hypot = sqrt(dx*dx + dy*dy); // convert to polar
+					hypot = sqrt(dx * dx + dy * dy); // convert to polar
 					angle = atan2(dy, dx);
 
 					angle += (var_angle * pi / 180); // apply adjustment in radians
@@ -237,11 +249,11 @@ int main()
 
 				// angle snapping
 				if (var_angleSnap) {
-					hypot = sqrt(dx*dx + dy*dy); // convert to polar
+					hypot = sqrt(dx * dx + dy * dy); // convert to polar
 					newangle = angle = atan2(dy, dx);
 
 
-					if (fabs(cos(angle)) < (var_angleSnap*pi / 180)) {	// test for vertical
+					if (fabs(cos(angle)) < (var_angleSnap * pi / 180)) {	// test for vertical
 						if (sin(angle) > 0) {
 							newangle = pi / 2;
 						}
@@ -250,7 +262,7 @@ int main()
 						}
 					}
 					else
-						if (fabs(sin(angle)) < (var_angleSnap*pi / 180)) {	// test for horizontal
+						if (fabs(sin(angle)) < (var_angleSnap * pi / 180)) {	// test for horizontal
 							if (cos(angle) < 0) {
 								newangle = pi;
 							}
@@ -277,7 +289,7 @@ int main()
 						SetConsoleTextAttribute(hConsole, 0x08);
 
 					}
-						
+
 
 				}
 
@@ -287,7 +299,7 @@ int main()
 
 				// apply speedcap
 				if (var_speedCap) {
-					rate = sqrt(dx*dx + dy*dy);
+					rate = sqrt(dx * dx + dy * dy);
 
 					if (debugOutput) {
 						coord.X = 40;
@@ -307,25 +319,25 @@ int main()
 					else {
 						if (debugOutput) {
 							printf("      ");
-						}							
+						}
 					}
 				}
 
 				// apply accel
 				accelSens = var_sens;							// start with in-game sens so accel calc scales the same
 				if (var_accel > 0) {
-					rate = sqrt(dx*dx + dy*dy) / frameTime_ms;	// calculate velocity of mouse based on deltas
+					rate = sqrt(dx * dx + dy * dy) / frameTime_ms;	// calculate velocity of mouse based on deltas
 					rate -= var_offset;							// offset affects the rate that accel sees
 					if (rate > 0) {
 						switch (var_accelMode) {
 						case 0:									//Original InterAccel acceleration
-							accelSens += pow((rate*var_accel), power);
+							accelSens += pow((rate * var_accel), power);
 							break;
 						case 1:									//TauntyArmordillo's natural acceleration
-							accelSens += a - (a * exp((-rate*b)));
+							accelSens += a - (a * exp((-rate * b)));
 							break;
 						case 2:									//Natural Log acceleration
-							accelSens += log((rate*var_accel) + 1);
+							accelSens += log((rate * var_accel) + 1);
 							break;
 						}
 					}
@@ -404,15 +416,83 @@ int main()
 
 				}
 
-				// output new counts
-				mstroke.x = (int)reducedX;
-				mstroke.y = (int)reducedY;
+
+				bool doAccel = false;
+				POINT p;
+				if (GetCursorPos(&p)) {
+
+					for (int i = mousePositionsSize - 2; i >= 0; i--) {
+						mousePositionsX[i + 1] = mousePositionsX[i];
+						mousePositionsY[i + 1] = mousePositionsY[i];
+					}
+					mousePositionsX[0] = p.x;
+					mousePositionsY[0] = p.y;
+
+
+					int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+					int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+					int movementX = abs(p.x - lastMouseX);
+					int movementY = abs(p.y - lastMouseY);
+					for (int i = mousePositionsSize - 2; i >= 0; i--) {
+						mouseSnapX[i + 1] = mouseSnapX[i];
+						mouseSnapY[i + 1] = mouseSnapY[i];
+					}
+					int fromHorizontalEdge = min(screenWidth - abs(p.x), abs(p.x)) % screenWidth;
+					int fromVerticalEdge = min(screenHeight - abs(p.x), abs(p.x)) % screenHeight;
+					if (fromHorizontalEdge < 2 || fromVerticalEdge < 2) {
+						mouseSnapX[0] = 0;
+						mouseSnapY[0] = 0;
+					}
+					else {
+						mouseSnapX[0] = movementX;
+						mouseSnapY[0] = movementY;
+					}
+
+					int same = 0;
+					for (int i = 0; i < mousePositionsSize; i++) {
+
+						int x = mousePositionsX[i];
+						int y = mousePositionsY[i];
+
+						int move = max(mouseSnapX[i], mouseSnapY[i]);
+						if (move > 0) {
+
+							for (int j = 0; j < mousePositionsSize; j++) {
+								int dx = abs(mousePositionsX[j] - x);
+								int dy = abs(mousePositionsY[j] - y);
+
+								if (dx == 0 && dy == 0) same++;
+							}
+						}
+					}
+
+					if (same > 300) doAccel = true;
+
+					if (doAccel) {
+						lastMouseX = p.x + (int)reducedX;
+						lastMouseY = p.y + (int)reducedY;
+					}
+					else {
+						lastMouseX = p.x + mstroke.x;
+						lastMouseY = p.y + mstroke.y;
+					}
+				}
+
+				if (doingAccel != doAccel)
+					printf("%05d\n", doAccel);
+				doingAccel = doAccel;
+
+				if (doAccel) {
+					// output new counts
+					mstroke.x = (int)reducedX;
+					mstroke.y = (int)reducedY;
+				}
 
 				oldFrameTime = frameTime;
 			}
 
 			interception_send(context, device, &stroke, 1);
-		} 
+		}
 	}
 
 	interception_destroy_context(context);
