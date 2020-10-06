@@ -466,7 +466,7 @@ int main()
 						}
 					}
 
-					if (same > 300) doAccel = true;
+					if (same > 100) doAccel = true;
 
 					if (doAccel) {
 						lastMouseX = p.x + (int)reducedX;
