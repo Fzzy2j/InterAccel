@@ -4,6 +4,7 @@
 #include <math.h>
 #include "winuser.h"
 #include <iostream>
+#include <chrono>
 
 int main()
 {
@@ -11,16 +12,13 @@ int main()
 	InterceptionDevice device;
 	InterceptionStroke stroke;
 
-	const int mousePositionsSize = 200;
-	int mousePositionsX[mousePositionsSize] = { };
-	int mousePositionsY[mousePositionsSize] = { };
-	bool mouseSnapX[mousePositionsSize] = { };
-	bool mouseSnapY[mousePositionsSize] = { };
+	const int snapBufferSize = 10;
+	int mouseSnapTime[snapBufferSize] = { };
+	bool shouldDoAccel = false;
+	bool wasDoingAccel = false;
 
 	int lastMouseX = 0;
 	int lastMouseY = 0;
-
-	bool doingAccel = false;
 
 	raise_process_priority();
 
@@ -236,144 +234,187 @@ int main()
 				dx = (double)mstroke.x;
 				dy = (double)mstroke.y;
 
-				// angle correction
-				if (var_angle) {
-					hypot = sqrt(dx * dx + dy * dy); // convert to polar
-					angle = atan2(dy, dx);
+				// in game detection
+				POINT p;
+				if (GetCursorPos(&p)) {
+					int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+					int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+					int movementX = abs(p.x - lastMouseX);
+					int movementY = abs(p.y - lastMouseY);
+					int fromHorizontalEdge = min(screenWidth - abs(p.x), abs(p.x)) % screenWidth;
+					int fromVerticalEdge = min(screenHeight - abs(p.y), abs(p.y)) % screenHeight;
+					int sinceEpoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-					angle += (var_angle * pi / 180); // apply adjustment in radians
+					if (fromHorizontalEdge > 1 && fromVerticalEdge > 1 && (movementX > 0 || movementY > 0)) {
+						for (int i = snapBufferSize - 2; i >= 0; i--) {
+							mouseSnapTime[i + 1] = mouseSnapTime[i];
+						}
 
-					dx = hypot * cos(angle); // convert back to cartesian
-					dy = hypot * sin(angle);
+						mouseSnapTime[0] = sinceEpoch;
+					}
+
+					int frame = 40;
+
+					int maxSnapTime = 0;
+					for (int i = 0; i < snapBufferSize - 2; i++) {
+						int diff = abs(mouseSnapTime[i] - mouseSnapTime[i + 1]);
+
+						if (diff > maxSnapTime) maxSnapTime = diff;
+					}
+
+					if (maxSnapTime < frame) {
+						shouldDoAccel = true;
+					}
+
+					if (sinceEpoch - mouseSnapTime[0] > frame) {
+						shouldDoAccel = false;
+					}
 				}
 
-				// angle snapping
-				if (var_angleSnap) {
-					hypot = sqrt(dx * dx + dy * dy); // convert to polar
-					newangle = angle = atan2(dy, dx);
+				if (shouldDoAccel != wasDoingAccel)
+					printf("%05d\n", shouldDoAccel);
+				wasDoingAccel = shouldDoAccel;
 
+				if (shouldDoAccel) {
+					// angle correction
+					if (var_angle) {
+						hypot = sqrt(dx * dx + dy * dy); // convert to polar
+						angle = atan2(dy, dx);
 
-					if (fabs(cos(angle)) < (var_angleSnap * pi / 180)) {	// test for vertical
-						if (sin(angle) > 0) {
-							newangle = pi / 2;
-						}
-						else {
-							newangle = 3 * pi / 2;
-						}
+						angle += (var_angle * pi / 180); // apply adjustment in radians
+
+						dx = hypot * cos(angle); // convert back to cartesian
+						dy = hypot * sin(angle);
 					}
-					else
-						if (fabs(sin(angle)) < (var_angleSnap * pi / 180)) {	// test for horizontal
-							if (cos(angle) < 0) {
-								newangle = pi;
+
+					// angle snapping
+					if (var_angleSnap) {
+						hypot = sqrt(dx * dx + dy * dy); // convert to polar
+						newangle = angle = atan2(dy, dx);
+
+
+						if (fabs(cos(angle)) < (var_angleSnap * pi / 180)) {	// test for vertical
+							if (sin(angle) > 0) {
+								newangle = pi / 2;
 							}
 							else {
-								newangle = 0;
+								newangle = 3 * pi / 2;
+							}
+						}
+						else
+							if (fabs(sin(angle)) < (var_angleSnap * pi / 180)) {	// test for horizontal
+								if (cos(angle) < 0) {
+									newangle = pi;
+								}
+								else {
+									newangle = 0;
+								}
+							}
+
+						dx = hypot * cos(newangle); // convert back to cartesian
+						dy = hypot * sin(newangle);
+
+						if (debugOutput) {
+
+							coord.X = 40;
+							coord.Y = 14;
+							SetConsoleCursorPosition(hConsole, coord);
+							if (angle - newangle != 0) {
+								SetConsoleTextAttribute(hConsole, 0x2f);
+								printf("Snapped");
+							}
+							else {
+								printf("       ");
+							}
+							SetConsoleTextAttribute(hConsole, 0x08);
+
+						}
+
+
+					}
+
+					// apply pre-scale
+					dx *= var_preScaleX;
+					dy *= var_preScaleY;
+
+					// apply speedcap
+					if (var_speedCap) {
+						rate = sqrt(dx * dx + dy * dy);
+
+						if (debugOutput) {
+							coord.X = 40;
+							coord.Y = 15;
+							SetConsoleCursorPosition(hConsole, coord);
+						}
+
+						if (rate >= var_speedCap) {
+							dx *= var_speedCap / rate;
+							dy *= var_speedCap / rate;
+							if (debugOutput) {
+								SetConsoleTextAttribute(hConsole, 0x2f);
+								printf("Capped");
+								SetConsoleTextAttribute(hConsole, 0x08);
+							}
+						}
+						else {
+							if (debugOutput) {
+								printf("      ");
+							}
+						}
+					}
+
+					// apply accel
+					accelSens = var_sens;							// start with in-game sens so accel calc scales the same
+					if (var_accel > 0) {
+						rate = sqrt(dx * dx + dy * dy) / frameTime_ms;	// calculate velocity of mouse based on deltas
+						rate -= var_offset;							// offset affects the rate that accel sees
+						if (rate > 0) {
+							switch (var_accelMode) {
+							case 0:									//Original InterAccel acceleration
+								accelSens += pow((rate * var_accel), power);
+								break;
+							case 1:									//TauntyArmordillo's natural acceleration
+								accelSens += a - (a * exp((-rate * b)));
+								break;
+							case 2:									//Natural Log acceleration
+								accelSens += log((rate * var_accel) + 1);
+								break;
 							}
 						}
 
-					dx = hypot * cos(newangle); // convert back to cartesian
-					dy = hypot * sin(newangle);
+						if (debugOutput) {
+							coord.X = 40;
+							coord.Y = 8;
+							SetConsoleCursorPosition(hConsole, coord);
+						}
 
-					if (debugOutput) {
-
-						coord.X = 40;
-						coord.Y = 14;
-						SetConsoleCursorPosition(hConsole, coord);
-						if (angle - newangle != 0) {
-							SetConsoleTextAttribute(hConsole, 0x2f);
-							printf("Snapped");
+						if (var_senscap > 0 && accelSens >= var_senscap) {
+							accelSens = var_senscap;				// clamp post-accel sensitivity at senscap
+							if (debugOutput) {
+								SetConsoleTextAttribute(hConsole, 0x2f);
+								printf("Capped");
+							}
 						}
 						else {
-							printf("       ");
+							if (debugOutput) {
+								printf("      ");
+							}
 						}
-						SetConsoleTextAttribute(hConsole, 0x08);
 
-					}
-
-
-				}
-
-				// apply pre-scale
-				dx *= var_preScaleX;
-				dy *= var_preScaleY;
-
-				// apply speedcap
-				if (var_speedCap) {
-					rate = sqrt(dx * dx + dy * dy);
-
-					if (debugOutput) {
-						coord.X = 40;
-						coord.Y = 15;
-						SetConsoleCursorPosition(hConsole, coord);
-					}
-
-					if (rate >= var_speedCap) {
-						dx *= var_speedCap / rate;
-						dy *= var_speedCap / rate;
 						if (debugOutput) {
-							SetConsoleTextAttribute(hConsole, 0x2f);
-							printf("Capped");
 							SetConsoleTextAttribute(hConsole, 0x08);
 						}
+
+
 					}
-					else {
-						if (debugOutput) {
-							printf("      ");
-						}
-					}
+					accelSens /= var_sens;							// divide by in-game sens as game will multiply it out
+					dx *= accelSens;								// apply accel to horizontal
+					dy *= accelSens;
+
+					// apply post-scale
+					dx *= var_postScaleX;
+					dy *= var_postScaleY;
 				}
-
-				// apply accel
-				accelSens = var_sens;							// start with in-game sens so accel calc scales the same
-				if (var_accel > 0) {
-					rate = sqrt(dx * dx + dy * dy) / frameTime_ms;	// calculate velocity of mouse based on deltas
-					rate -= var_offset;							// offset affects the rate that accel sees
-					if (rate > 0) {
-						switch (var_accelMode) {
-						case 0:									//Original InterAccel acceleration
-							accelSens += pow((rate * var_accel), power);
-							break;
-						case 1:									//TauntyArmordillo's natural acceleration
-							accelSens += a - (a * exp((-rate * b)));
-							break;
-						case 2:									//Natural Log acceleration
-							accelSens += log((rate * var_accel) + 1);
-							break;
-						}
-					}
-
-					if (debugOutput) {
-						coord.X = 40;
-						coord.Y = 8;
-						SetConsoleCursorPosition(hConsole, coord);
-					}
-
-					if (var_senscap > 0 && accelSens >= var_senscap) {
-						accelSens = var_senscap;				// clamp post-accel sensitivity at senscap
-						if (debugOutput) {
-							SetConsoleTextAttribute(hConsole, 0x2f);
-							printf("Capped");
-						}
-					}
-					else {
-						if (debugOutput) {
-							printf("      ");
-						}
-					}
-
-					if (debugOutput) {
-						SetConsoleTextAttribute(hConsole, 0x08);
-					}
-
-
-				}
-				accelSens /= var_sens;							// divide by in-game sens as game will multiply it out
-				dx *= accelSens;								// apply accel to horizontal
-				dy *= accelSens;
-
-				// apply post-scale
-				dx *= var_postScaleX;
-				dy *= var_postScaleY;
 
 				// add remainder from previous cycle
 				dx += carryX;
@@ -416,77 +457,12 @@ int main()
 
 				}
 
+				// output new counts
+				mstroke.x = (int)reducedX;
+				mstroke.y = (int)reducedY;
 
-				bool doAccel = false;
-				POINT p;
-				if (GetCursorPos(&p)) {
-
-					for (int i = mousePositionsSize - 2; i >= 0; i--) {
-						mousePositionsX[i + 1] = mousePositionsX[i];
-						mousePositionsY[i + 1] = mousePositionsY[i];
-					}
-					mousePositionsX[0] = p.x;
-					mousePositionsY[0] = p.y;
-
-
-					int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-					int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-					int movementX = abs(p.x - lastMouseX);
-					int movementY = abs(p.y - lastMouseY);
-					for (int i = mousePositionsSize - 2; i >= 0; i--) {
-						mouseSnapX[i + 1] = mouseSnapX[i];
-						mouseSnapY[i + 1] = mouseSnapY[i];
-					}
-					int fromHorizontalEdge = min(screenWidth - abs(p.x), abs(p.x)) % screenWidth;
-					int fromVerticalEdge = min(screenHeight - abs(p.x), abs(p.x)) % screenHeight;
-					if (fromHorizontalEdge < 2 || fromVerticalEdge < 2) {
-						mouseSnapX[0] = 0;
-						mouseSnapY[0] = 0;
-					}
-					else {
-						mouseSnapX[0] = movementX;
-						mouseSnapY[0] = movementY;
-					}
-
-					int same = 0;
-					for (int i = 0; i < mousePositionsSize; i++) {
-
-						int x = mousePositionsX[i];
-						int y = mousePositionsY[i];
-
-						int move = max(mouseSnapX[i], mouseSnapY[i]);
-						if (move > 0) {
-
-							for (int j = 0; j < mousePositionsSize; j++) {
-								int dx = abs(mousePositionsX[j] - x);
-								int dy = abs(mousePositionsY[j] - y);
-
-								if (dx == 0 && dy == 0) same++;
-							}
-						}
-					}
-
-					if (same > 100) doAccel = true;
-
-					if (doAccel) {
-						lastMouseX = p.x + (int)reducedX;
-						lastMouseY = p.y + (int)reducedY;
-					}
-					else {
-						lastMouseX = p.x + mstroke.x;
-						lastMouseY = p.y + mstroke.y;
-					}
-				}
-
-				if (doingAccel != doAccel)
-					printf("%05d\n", doAccel);
-				doingAccel = doAccel;
-
-				if (doAccel) {
-					// output new counts
-					mstroke.x = (int)reducedX;
-					mstroke.y = (int)reducedY;
-				}
+				lastMouseX = p.x + mstroke.x;
+				lastMouseY = p.y + mstroke.y;
 
 				oldFrameTime = frameTime;
 			}
