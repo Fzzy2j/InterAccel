@@ -12,14 +12,6 @@ int main()
 	InterceptionDevice device;
 	InterceptionStroke stroke;
 
-	const int snapBufferSize = 10;
-	int mouseSnapTime[snapBufferSize] = { };
-	bool shouldDoAccel = false;
-	bool wasDoingAccel = false;
-
-	int lastMouseX = 0;
-	int lastMouseY = 0;
-
 	raise_process_priority();
 
 	context = interception_create_context();
@@ -235,45 +227,13 @@ int main()
 				dy = (double)mstroke.y;
 
 				// in game detection
-				POINT p;
-				if (GetCursorPos(&p)) {
-					int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-					int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-					int movementX = abs(p.x - lastMouseX);
-					int movementY = abs(p.y - lastMouseY);
-					int fromHorizontalEdge = min(screenWidth - abs(p.x), abs(p.x)) % screenWidth;
-					int fromVerticalEdge = min(screenHeight - abs(p.y), abs(p.y)) % screenHeight;
-					int sinceEpoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-
-					if (fromHorizontalEdge > 1 && fromVerticalEdge > 1 && (movementX > 0 || movementY > 0)) {
-						for (int i = snapBufferSize - 2; i >= 0; i--) {
-							mouseSnapTime[i + 1] = mouseSnapTime[i];
-						}
-
-						mouseSnapTime[0] = sinceEpoch;
-					}
-
-					int frame = 40;
-
-					int maxSnapTime = 0;
-					for (int i = 0; i < snapBufferSize - 2; i++) {
-						int diff = abs(mouseSnapTime[i] - mouseSnapTime[i + 1]);
-
-						if (diff > maxSnapTime) maxSnapTime = diff;
-					}
-
-					if (maxSnapTime < frame) {
-						shouldDoAccel = true;
-					}
-
-					if (sinceEpoch - mouseSnapTime[0] > frame) {
+				bool shouldDoAccel = true;
+				CURSORINFO ci = { sizeof(CURSORINFO) };
+				if (GetCursorInfo(&ci)) {
+					if (ci.flags == 1) {
 						shouldDoAccel = false;
 					}
 				}
-
-				if (shouldDoAccel != wasDoingAccel)
-					printf("%05d\n", shouldDoAccel);
-				wasDoingAccel = shouldDoAccel;
 
 				if (shouldDoAccel) {
 					// angle correction
@@ -460,9 +420,6 @@ int main()
 				// output new counts
 				mstroke.x = (int)reducedX;
 				mstroke.y = (int)reducedY;
-
-				lastMouseX = p.x + mstroke.x;
-				lastMouseY = p.y + mstroke.y;
 
 				oldFrameTime = frameTime;
 			}
